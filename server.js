@@ -178,7 +178,7 @@ app.get('/posts/:userId', async (req, res) => {
         const user = userResponse.data;
 
         // Fetch posts data for the specific userId from the API
-        const postResponse = await axios.get(`https://jsonplaceholder.typicode.com/posts?userId=${userId}`);
+        const postResponse = await axios.get(`https://jsonplaceholder.typicode.com/posts?userId=${userId}&_locale=en`);
         const posts = postResponse.data;
 
         // Check if posts already exist for this user in the database
@@ -259,7 +259,7 @@ app.post('/bulkAddPosts', express.json(), async (req, res) => {
     const { userId } = req.body;
     try {
         // Fetch posts data for the specific userId from the API
-        const postResponse = await axios.get(`https://jsonplaceholder.typicode.com/posts?userId=${userId}`);
+        const postResponse = await axios.get(`https://jsonplaceholder.typicode.com/posts?userId=${userId}&_locale=en`);
         const posts = postResponse.data;
 
         // Insert posts into the database
