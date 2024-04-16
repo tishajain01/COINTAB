@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const sqlite3 = require('sqlite3').verbose();
 const json2xls = require('json2xls');
+const fs = require('fs');
 
 const app = express();
 const port = process.env.PORT || 3000; // Use process.env.PORT for Heroku compatibility
@@ -19,6 +20,17 @@ db.serialize(() => {
         website TEXT,
         city TEXT,
         company TEXT
+    )`);
+});
+
+// Create posts table
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS posts (
+        id INTEGER PRIMARY KEY,
+        userId INTEGER,
+        title TEXT,
+        body TEXT,
+        FOREIGN KEY (userId) REFERENCES users(id)
     )`);
 });
 
@@ -169,6 +181,9 @@ app.get('/posts/:userId', async (req, res) => {
         const postResponse = await axios.get(`https://jsonplaceholder.typicode.com/posts?userId=${userId}`);
         const posts = postResponse.data;
 
+        // Check if posts already exist for this user in the database
+        const postsExist = await checkPostsExist(userId);
+
         // Render posts information
         const postList = posts.map(post => `
             <div>
@@ -179,6 +194,20 @@ app.get('/posts/:userId', async (req, res) => {
             </div>
         `).join('');
 
+        // Render buttons based on whether posts exist in the database
+        let buttonsHtml = '';
+        if (!postsExist) {
+            buttonsHtml = `
+                <button id="bulkAddBtn" onclick="bulkAddPosts(${userId})">Bulk Add</button>
+                <button id="downloadBtn" style="display:none;" onclick="downloadExcel(${userId})">Download In Excel</button>
+            `;
+        } else {
+            buttonsHtml = `
+                <button id="bulkAddBtn" style="display:none;" onclick="bulkAddPosts(${userId})">Bulk Add</button>
+                <button id="downloadBtn" onclick="downloadExcel(${userId})">Download In Excel</button>
+            `;
+        }
+
         res.send(`
             <html>
             <head>
@@ -187,11 +216,35 @@ app.get('/posts/:userId', async (req, res) => {
                         text-align: center;
                     }
                 </style>
+                <script>
+                    async function bulkAddPosts(userId) {
+                        try {
+                            const response = await fetch('/bulkAddPosts', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ userId })
+                            });
+                            if (response.ok) {
+                                location.reload(); // Refresh the page to update buttons
+                            } else {
+                                console.error('Failed to bulk add posts');
+                            }
+                        } catch (error) {
+                            console.error('Error bulk adding posts:', error);
+                        }
+                    }
+
+                    function downloadExcel(userId) {
+                        window.location.href = '/downloadExcel/' + userId;
+                    }
+                </script>
             </head>
             <body>
                 <h1>Posts for User ${user.name}</h1>
+                ${buttonsHtml}
                 ${postList}
-                <a href="/users">Back to Users</a>
             </body>
             </html>
         `);
@@ -200,6 +253,86 @@ app.get('/posts/:userId', async (req, res) => {
         res.status(500).send('Internal Server Error');
     }
 });
+
+// Endpoint to bulk add posts to the database
+app.post('/bulkAddPosts', express.json(), async (req, res) => {
+    const { userId } = req.body;
+    try {
+        // Fetch posts data for the specific userId from the API
+        const postResponse = await axios.get(`https://jsonplaceholder.typicode.com/posts?userId=${userId}`);
+        const posts = postResponse.data;
+
+        // Insert posts into the database
+        for (const post of posts) {
+            await insertPost(userId, post.title, post.body);
+        }
+
+        res.sendStatus(200);
+    } catch (error) {
+        console.error('Error bulk adding posts to database:', error);
+        res.sendStatus(500);
+    }
+});
+
+// Function to check if posts exist for a specific user in the database
+function checkPostsExist(userId) {
+    return new Promise((resolve, reject) => {
+        db.get('SELECT * FROM posts WHERE userId = ?', [userId], (err, row) => {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(!!row);
+            }
+        });
+    });
+}
+
+// Function to insert a post into the database
+function insertPost(userId, title, body) {
+    return new Promise((resolve, reject) => {
+        db.run('INSERT INTO posts (userId, title, body) VALUES (?, ?, ?)', [userId, title, body], (err) => {
+            if (err) {
+                reject(err);
+            } else {
+                resolve();
+            }
+        });
+    });
+}
+
+// Endpoint to download post information in Excel format
+app.get('/downloadExcel/:userId', async (req, res) => {
+    const userId = req.params.userId;
+    try {
+        // Fetch posts data for the specific userId from the database
+        const posts = await getPosts(userId);
+
+        // Convert posts data to Excel format
+        const excelData = posts.map(post => ({ Title: post.title, Body: post.body }));
+        const xls = json2xls(excelData);
+
+        // Set response headers for file download
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats');
+        res.setHeader("Content-Disposition", "attachment; filename=" + `posts_${userId}.xlsx`);
+        res.end(xls, 'binary');
+    } catch (error) {
+        console.error('Error generating Excel file:', error);
+        res.sendStatus(500);
+    }
+});
+
+// Function to retrieve posts for a specific userId from the database
+function getPosts(userId) {
+    return new Promise((resolve, reject) => {
+        db.all('SELECT * FROM posts WHERE userId = ?', [userId], (err, rows) => {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(rows);
+            }
+        });
+    });
+}
 
 // Start server
 app.listen(port, () => {
